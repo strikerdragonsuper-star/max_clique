@@ -57,7 +57,7 @@ if command -v pm2 >/dev/null 2>&1; then
         pm2 delete "$MINER_NAME" 2>/dev/null || true
     fi
     pm2 start "$VENV_DIR/bin/python" --name "$MINER_NAME" -- \
-        -m CliqueAI.miner \
+        -m model_upgrade.miner \
         "${MINER_ARGS[@]}"
     pm2 save
     echo
@@ -66,5 +66,5 @@ if command -v pm2 >/dev/null 2>&1; then
     echo "  pm2 status"
 else
     echo "pm2 not found; running miner in foreground..."
-    exec python -m CliqueAI.miner "${MINER_ARGS[@]}"
+    exec python -m model_upgrade.miner "${MINER_ARGS[@]}"
 fi
