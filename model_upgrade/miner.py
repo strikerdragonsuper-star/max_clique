@@ -53,6 +53,12 @@ class Miner(BaseMinerNeuron):
             blacklist_fn=self.backlist_graph,
             priority_fn=self.priority_graph,
         )
+        if is_validator_data_enabled():
+            bt.logging.info("Validator data saving is enabled")
+        else:
+            bt.logging.info(
+                "Validator data saving is disabled (SAVE_VALIDATOR_DATA=false)"
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         self._solve_executor.shutdown(wait=False, cancel_futures=True)

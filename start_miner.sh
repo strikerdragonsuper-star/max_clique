@@ -56,7 +56,7 @@ if command -v pm2 >/dev/null 2>&1; then
     if pm2 list | grep -q "$MINER_NAME"; then
         pm2 delete "$MINER_NAME" 2>/dev/null || true
     fi
-    pm2 start "$VENV_DIR/bin/python" --name "$MINER_NAME" -- \
+    pm2 start "$VENV_DIR/bin/python" --name "$MINER_NAME" --update-env -- \
         -m model_upgrade.miner \
         "${MINER_ARGS[@]}"
     pm2 save

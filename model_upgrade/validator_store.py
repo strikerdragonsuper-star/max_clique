@@ -19,10 +19,35 @@ DEFAULT_VALIDATOR_DATA_DIR = PROJECT_ROOT / "validator_data"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on", "enabled"})
 _FALSY = frozenset({"0", "false", "no", "off", "disabled"})
+_MINER_ENV_LOADED = False
+
+
+def load_miner_env_file() -> None:
+    """Load miner.env into os.environ (does not override existing variables)."""
+    global _MINER_ENV_LOADED
+    if _MINER_ENV_LOADED:
+        return
+
+    env_path = PROJECT_ROOT / "miner.env"
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "=" not in stripped:
+                continue
+            key, _, value = stripped.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+    _MINER_ENV_LOADED = True
 
 
 def is_validator_data_enabled() -> bool:
     """Return False when SAVE_VALIDATOR_DATA is set to a falsy value."""
+    load_miner_env_file()
     raw = os.environ.get("SAVE_VALIDATOR_DATA", "true").strip().lower()
     if raw in _FALSY:
         return False
