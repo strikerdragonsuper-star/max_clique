@@ -19,7 +19,7 @@ from model_upgrade.heuristics import (
 from model_upgrade.validation import extend_to_maximal_clique, is_valid_maximum_clique
 
 # Seconds reserved before validator timeout for decode/encode/network overhead.
-TIME_HEADROOM_SECONDS = 0.7
+TIME_HEADROOM_SECONDS = 0.9
 MIN_SEARCH_SECONDS = 0.5
 CORE_EXACT_THRESHOLD = 230
 CORE_SEARCH_THRESHOLD = 320
