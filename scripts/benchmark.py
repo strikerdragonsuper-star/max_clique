@@ -153,10 +153,12 @@ def benchmark_file(
         delta = len(clique) - reference_size
         sign = "+" if delta > 0 else ""
         ref_note = f" | ref={reference_size} ({sign}{delta})"
+    delay = timeout - elapsed
+    delay_note = f"delay={delay:+5.2f}s ({elapsed / timeout * 100:4.0f}%)" if timeout > 0 else ""
     print(
         f"{data_path.name:36} | nodes={synapse.number_of_nodes:4} | "
-        f"timeout={timeout:4.1f}s | "
-        f"clique={len(clique):4} | time={elapsed:6.3f}s | {status}{ref_note}"
+        f"timeout={timeout:4.1f}s | elapsed={elapsed:5.2f}s | {delay_note} | "
+        f"clique={len(clique):4} | {status}{ref_note}"
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -169,6 +171,8 @@ def benchmark_file(
         "difficulty": difficulty,
         "timeout": timeout,
         "elapsed_seconds": round(elapsed, 6),
+        "delay_seconds": round(delay, 6),
+        "elapsed_pct_of_timeout": round(elapsed / timeout * 100, 2) if timeout > 0 else None,
         "valid": valid,
         "clique_size": len(clique),
         "maximum_clique": clique,
