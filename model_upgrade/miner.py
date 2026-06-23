@@ -27,6 +27,7 @@ def _solve_before_deadline(
     number_of_nodes: int,
     adjacency_list: list[list[int]],
     time_limit: float,
+    problem_id: str | None,
 ) -> list[int]:
     """Run the solver with only the time left when this job actually starts."""
     remaining = response_deadline - time.perf_counter()
@@ -38,6 +39,7 @@ def _solve_before_deadline(
         number_of_nodes,
         adjacency_list,
         time_limit=effective_limit,
+        problem_id=problem_id,
     )
 
 
@@ -92,6 +94,7 @@ class Miner(BaseMinerNeuron):
             synapse.number_of_nodes,
             adjacency_list,
             time_limit,
+            synapse.uuid or None,
         )
 
         safety_timeout = max(time_limit + 30.0, SAFETY_SOLVE_TIMEOUT_SECONDS)

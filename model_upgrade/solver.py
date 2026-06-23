@@ -1,3 +1,4 @@
+import hashlib
 import os
 import random
 import time
@@ -21,7 +22,7 @@ from model_upgrade.validation import extend_to_maximal_clique, is_valid_maximum_
 # Seconds reserved before validator timeout for decode/encode/network overhead.
 TIME_HEADROOM_SECONDS = 0.9
 MIN_SEARCH_SECONDS = 0.5
-CORE_EXACT_THRESHOLD = 230
+CORE_EXACT_THRESHOLD = 280
 CORE_SEARCH_THRESHOLD = 320
 PORTFOLIO_PARALLEL_MIN_TIMEOUT = 10.0
 PORTFOLIO_WORKERS = 3
@@ -40,6 +41,31 @@ STRATEGIES: list[dict[str, float]] = [
 def search_budget(validator_timeout: float) -> float:
     """Search seconds available before the validator timeout."""
     return max(MIN_SEARCH_SECONDS, validator_timeout - TIME_HEADROOM_SECONDS)
+
+
+def _resolve_seed(
+    seed: int | None,
+    problem_id: str | None,
+    number_of_nodes: int,
+    adjacency_list: list[list[int]],
+) -> int:
+    """Stable RNG seed: explicit > problem uuid > compact graph fingerprint."""
+    if seed is not None:
+        return seed
+
+    if problem_id:
+        digest = hashlib.sha256(problem_id.strip().encode()).digest()
+        return int.from_bytes(digest[:8], "big") ^ number_of_nodes
+
+    hasher = hashlib.sha256()
+    hasher.update(number_of_nodes.to_bytes(4, "little"))
+    edge_count = sum(len(row) for row in adjacency_list)
+    hasher.update(edge_count.to_bytes(4, "little"))
+    for vertex in range(min(number_of_nodes, 64)):
+        hasher.update(len(adjacency_list[vertex]).to_bytes(2, "little"))
+        for neighbor in adjacency_list[vertex][:8]:
+            hasher.update(neighbor.to_bytes(2, "little"))
+    return int.from_bytes(hasher.digest()[:8], "big")
 
 
 def _subgraph_adjacency(sub_neighbor_sets: list[set[int]]) -> list[list[int]]:
@@ -333,12 +359,16 @@ def solve_maximum_clique(
     adjacency_list: list[list[int]],
     time_limit: float = 30.0,
     seed: int | None = None,
+    problem_id: str | None = None,
 ) -> list[int]:
     """
     Find a large maximal clique within the validator time budget.
 
     Diversified portfolio of bitset heuristics, penalty local search, and
     coloring branch-and-bound. Leaves TIME_HEADROOM_SECONDS before timeout.
+
+    When ``seed`` is omitted, RNG is seeded from ``problem_id`` (validator uuid)
+    or a compact graph fingerprint so repeated queries are reproducible.
     """
     if number_of_nodes != len(adjacency_list):
         raise ValueError(
@@ -348,8 +378,7 @@ def solve_maximum_clique(
     if number_of_nodes == 0:
         return []
 
-    if seed is None:
-        seed = int(time.perf_counter() * 1_000_000)
+    seed = _resolve_seed(seed, problem_id, number_of_nodes, adjacency_list)
 
     budget = search_budget(time_limit)
     outer_start = time.perf_counter()
@@ -373,19 +402,9 @@ def solve_maximum_clique(
         results = _run_portfolio_parallel(tasks, outer_deadline)
         if results:
             best = max(results, key=len)
-    elif time_limit <= 6.5:
-        best = _solve_single(
-            number_of_nodes,
-            adjacency_list,
-            budget,
-            seed,
-            STRATEGIES[0],
-            deadline=outer_deadline,
-        )
     else:
-        run_budget = budget / 2 if time_limit < 15.0 else budget / PORTFOLIO_RUNS
-        runs = 2 if time_limit < 15.0 else PORTFOLIO_RUNS
-        for run in range(runs):
+        run_budget = budget / PORTFOLIO_RUNS
+        for run in range(PORTFOLIO_RUNS):
             if time.perf_counter() >= outer_deadline:
                 break
             candidate = _solve_single(

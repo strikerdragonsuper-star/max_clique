@@ -140,6 +140,7 @@ def benchmark_file(
         synapse.number_of_nodes,
         adjacency_list,
         time_limit=timeout,
+        problem_id=synapse.uuid or None,
     )
     elapsed = time.perf_counter() - start
     valid = is_valid_maximum_clique(adjacency_list, clique)
