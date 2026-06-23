@@ -25,12 +25,14 @@ TIME_HEADROOM_SECONDS = 0.9
 MIN_SEARCH_SECONDS = 0.5
 CORE_EXACT_THRESHOLD = 280
 CORE_SEARCH_THRESHOLD = 320
-PORTFOLIO_PARALLEL_MIN_TIMEOUT = 10.0
+PORTFOLIO_PARALLEL_MIN_TIMEOUT = 7.5
+DENSE_PARALLEL_MIN_TIMEOUT = 10.0
 PORTFOLIO_WORKERS = 3
 PORTFOLIO_RUNS = 3
 BURST_RESTART_SECONDS = 0.10
 BURST_LOCAL_SECONDS = 0.20
-DENSE_POLISH_FRACTION = 0.38
+DENSE_POLISH_FRACTION = 0.40
+SEED_ALT_OFFSET = 999983
 
 # Diversified portfolio strategies: phase weights + BB aggressiveness.
 STRATEGIES: list[dict[str, float]] = [
@@ -372,6 +374,27 @@ def fallback_maximum_clique(adjacency_list: list[list[int]]) -> list[int]:
     return extend_to_maximal_clique(adjacency_list, [seed_vertex])
 
 
+def _maybe_dense_complement(
+    adjacency_list: list[list[int]],
+    best: list[int],
+    seed: int,
+    outer_deadline: float,
+) -> list[int]:
+    """Run complement search on remaining budget and keep the larger clique."""
+    remaining = outer_deadline - time.perf_counter()
+    if remaining <= 0.15:
+        return best
+    candidate = solve_dense_complement(
+        adjacency_list,
+        remaining,
+        seed,
+        deadline=outer_deadline,
+    )
+    if len(candidate) > len(best):
+        return candidate
+    return best
+
+
 def solve_maximum_clique(
     number_of_nodes: int,
     adjacency_list: list[list[int]],
@@ -403,17 +426,18 @@ def solve_maximum_clique(
     outer_deadline = outer_start + budget
     cpu_count = os.cpu_count() or 1
     neighbor_sets = [set(neighbors) for neighbors in adjacency_list]
-    dense = is_dense_graph(neighbor_sets)
+    complement = is_dense_graph(neighbor_sets)
+    use_parallel = time_limit >= PORTFOLIO_PARALLEL_MIN_TIMEOUT and cpu_count >= 4
 
     best: list[int] = []
-    dense_deadline = outer_deadline
     worker_deadline = outer_deadline
-    if dense and time_limit >= PORTFOLIO_PARALLEL_MIN_TIMEOUT and cpu_count >= 4:
-        dense_slice = max(0.5, budget * DENSE_POLISH_FRACTION)
-        dense_deadline = outer_deadline
+    dense_deadline = outer_deadline
+    if complement and use_parallel:
+        dense_fraction = DENSE_POLISH_FRACTION if time_limit >= DENSE_PARALLEL_MIN_TIMEOUT else 0.35
+        dense_slice = max(0.4, budget * dense_fraction)
         worker_deadline = outer_start + max(0.5, budget - dense_slice)
 
-    if time_limit >= PORTFOLIO_PARALLEL_MIN_TIMEOUT and cpu_count >= 4:
+    if use_parallel:
         standard_tasks = [
             (
                 number_of_nodes,
@@ -428,7 +452,7 @@ def solve_maximum_clique(
         results = _run_portfolio_parallel(standard_tasks, [], worker_deadline)
         if results:
             best = max(results, key=len)
-        if dense and time.perf_counter() < dense_deadline:
+        if complement and time.perf_counter() < dense_deadline:
             dense_candidate = solve_dense_complement(
                 adjacency_list,
                 dense_deadline - time.perf_counter(),
@@ -438,18 +462,34 @@ def solve_maximum_clique(
             if len(dense_candidate) > len(best):
                 best = dense_candidate
     else:
-        run_budget = budget / PORTFOLIO_RUNS
-        for run in range(PORTFOLIO_RUNS):
-            if time.perf_counter() >= outer_deadline:
-                break
-            if dense and run == PORTFOLIO_RUNS - 1:
-                candidate = solve_dense_complement(
-                    adjacency_list,
-                    run_budget,
-                    seed + run * 7919,
-                    deadline=outer_deadline,
-                )
-            else:
+        if complement:
+            run_budget = budget / PORTFOLIO_RUNS
+            for run in range(PORTFOLIO_RUNS):
+                if time.perf_counter() >= outer_deadline:
+                    break
+                if run == PORTFOLIO_RUNS - 1:
+                    candidate = solve_dense_complement(
+                        adjacency_list,
+                        run_budget,
+                        seed + run * 7919,
+                        deadline=outer_deadline,
+                    )
+                else:
+                    candidate = _solve_single(
+                        number_of_nodes,
+                        adjacency_list,
+                        run_budget,
+                        seed + run * 7919,
+                        STRATEGIES[run % len(STRATEGIES)],
+                        deadline=outer_deadline,
+                    )
+                if len(candidate) > len(best):
+                    best = candidate
+        else:
+            run_budget = budget / PORTFOLIO_RUNS
+            for run in range(PORTFOLIO_RUNS):
+                if time.perf_counter() >= outer_deadline:
+                    break
                 candidate = _solve_single(
                     number_of_nodes,
                     adjacency_list,
@@ -458,8 +498,8 @@ def solve_maximum_clique(
                     STRATEGIES[run % len(STRATEGIES)],
                     deadline=outer_deadline,
                 )
-            if len(candidate) > len(best):
-                best = candidate
+                if len(candidate) > len(best):
+                    best = candidate
 
     if best and time.perf_counter() < outer_deadline:
         core_numbers, degeneracy = core_and_degeneracy(neighbor_sets)
@@ -471,13 +511,13 @@ def solve_maximum_clique(
         penalties = [0] * number_of_nodes
         rng = random.Random(seed + 424242)
         bb_seconds = max(0.5, budget * 0.2)
-        polish_deadline = worker_deadline if dense else outer_deadline
-        if dense and time.perf_counter() < polish_deadline:
+        polish_deadline = worker_deadline if complement else outer_deadline
+        if complement and time.perf_counter() < polish_deadline:
             polish_deadline = min(
                 polish_deadline,
-                time.perf_counter() + max(0.15, (polish_deadline - time.perf_counter()) * 0.5),
+                time.perf_counter() + max(0.15, (polish_deadline - time.perf_counter()) * 0.45),
             )
-        elif dense:
+        elif complement and time_limit >= DENSE_PARALLEL_MIN_TIMEOUT:
             polish_deadline = time.perf_counter()
         best = _improve_until_deadline(
             best,
@@ -492,17 +532,13 @@ def solve_maximum_clique(
             penalties,
         )
 
-    if dense and time.perf_counter() < outer_deadline and not (
-        time_limit >= PORTFOLIO_PARALLEL_MIN_TIMEOUT and cpu_count >= 4
-    ):
-        dense_candidate = solve_dense_complement(
+    if complement and time.perf_counter() < outer_deadline:
+        best = _maybe_dense_complement(
             adjacency_list,
-            outer_deadline - time.perf_counter(),
-            seed + 31337,
-            deadline=outer_deadline,
+            best,
+            seed + SEED_ALT_OFFSET,
+            outer_deadline,
         )
-        if len(dense_candidate) > len(best):
-            best = dense_candidate
 
     if not best or not is_valid_maximum_clique(adjacency_list, best):
         best = fallback_maximum_clique(adjacency_list)

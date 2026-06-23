@@ -13,7 +13,8 @@ from model_upgrade.bitsets import (
 from model_upgrade.graph_utils import core_and_degeneracy
 from model_upgrade.validation import extend_to_maximal_clique, is_valid_maximum_clique
 
-DENSE_DEGREE_RATIO = 0.75
+# Validator lambda graphs: complement search from ~70% edge density upward.
+DENSE_DEGREE_RATIO = 0.70
 
 
 def is_dense_graph(
