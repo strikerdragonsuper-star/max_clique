@@ -15,7 +15,9 @@ from model_upgrade.graph_utils import (
 from model_upgrade.heuristics import local_search, random_restarts
 from model_upgrade.validation import extend_to_maximal_clique, is_valid_maximum_clique
 
-TIME_BUDGET_FRACTION = 0.88
+# Fixed wall-clock reserve for decode/encode/network overhead (seconds).
+TIME_HEADROOM_SECONDS = 0.7
+MIN_SEARCH_SECONDS = 0.5
 CORE_EXACT_THRESHOLD = 200
 CORE_SEARCH_THRESHOLD = 280
 PORTFOLIO_PARALLEL_MIN_TIMEOUT = 10.0
@@ -25,10 +27,15 @@ BURST_RESTART_SECONDS = 0.10
 BURST_LOCAL_SECONDS = 0.18
 
 
-def phase_budgets(time_limit: float) -> dict[str, float]:
-    if time_limit <= 6.5:
+def search_budget(validator_timeout: float) -> float:
+    """Search seconds available before the validator timeout."""
+    return max(MIN_SEARCH_SECONDS, validator_timeout - TIME_HEADROOM_SECONDS)
+
+
+def phase_budgets(validator_timeout: float) -> dict[str, float]:
+    if validator_timeout <= 6.5:
         return {"heuristic": 0.25, "local": 0.35, "bb": 0.10, "burst": 0.30}
-    if time_limit <= 10.0:
+    if validator_timeout <= 10.0:
         return {"heuristic": 0.20, "local": 0.30, "bb": 0.15, "burst": 0.35}
     return {"heuristic": 0.15, "local": 0.25, "bb": 0.20, "burst": 0.40}
 
@@ -108,11 +115,56 @@ def _refine_on_core(
     return best
 
 
+def _improve_until_deadline(
+    best: list[int],
+    neighbor_sets: list[set[int]],
+    adjacency_list: list[list[int]],
+    core_numbers: list[int],
+    degeneracy: list[int],
+    neighbor_masks: list[int] | None,
+    deadline: float,
+    bb_seconds: float,
+    rng: random.Random,
+) -> list[int]:
+    while time.perf_counter() < deadline:
+        burst_deadline = min(deadline, time.perf_counter() + BURST_RESTART_SECONDS)
+        candidate = random_restarts(
+            neighbor_sets,
+            burst_deadline,
+            rng,
+            degeneracy=degeneracy,
+            neighbor_masks=neighbor_masks,
+        )
+        candidate = extend_to_maximal_clique(adjacency_list, candidate)
+
+        burst_deadline = min(deadline, time.perf_counter() + BURST_LOCAL_SECONDS)
+        candidate = local_search(neighbor_sets, candidate, burst_deadline, rng)
+        candidate = extend_to_maximal_clique(adjacency_list, candidate)
+
+        if len(candidate) > len(best):
+            best = candidate
+            best = _refine_on_core(
+                best,
+                neighbor_sets,
+                adjacency_list,
+                core_numbers,
+                degeneracy,
+                neighbor_masks,
+                deadline,
+                bb_seconds * 0.5,
+                rng,
+            )
+
+    return best
+
+
 def _solve_single(
     number_of_nodes: int,
     adjacency_list: list[list[int]],
-    time_limit: float,
+    budget_seconds: float,
+    validator_timeout: float,
     seed: int,
+    deadline: float | None = None,
 ) -> list[int]:
     rng = random.Random(seed)
     neighbor_sets = [set(neighbors) for neighbors in adjacency_list]
@@ -124,23 +176,27 @@ def _solve_single(
         else None
     )
 
-    phases = phase_budgets(time_limit)
+    phases = phase_budgets(validator_timeout)
     start = time.perf_counter()
-    deadline = start + max(0.1, time_limit * TIME_BUDGET_FRACTION)
-    heuristic_deadline = start + max(0.05, time_limit * phases["heuristic"])
-    local_deadline = start + max(0.1, time_limit * phases["local"])
-    bb_seconds = max(0.5, time_limit * phases["bb"])
+    if deadline is None:
+        deadline = start + budget_seconds
+    else:
+        deadline = min(deadline, start + budget_seconds)
+
+    heuristic_deadline = start + max(0.05, budget_seconds * phases["heuristic"])
+    local_deadline = start + max(0.1, budget_seconds * phases["local"])
+    bb_seconds = max(0.5, budget_seconds * phases["bb"])
 
     best = random_restarts(
         neighbor_sets,
-        heuristic_deadline,
+        min(heuristic_deadline, deadline),
         rng,
         degeneracy=degeneracy,
         neighbor_masks=neighbor_masks,
     )
     best = extend_to_maximal_clique(adjacency_list, best)
 
-    best = local_search(neighbor_sets, best, local_deadline, rng)
+    best = local_search(neighbor_sets, best, min(local_deadline, deadline), rng)
     best = extend_to_maximal_clique(adjacency_list, best)
 
     best = _refine_on_core(
@@ -162,40 +218,17 @@ def _solve_single(
             best = exact
         best = extend_to_maximal_clique(adjacency_list, best)
 
-    stagnation = 0
-    while time.perf_counter() < deadline:
-        burst_deadline = min(deadline, time.perf_counter() + BURST_RESTART_SECONDS)
-        candidate = random_restarts(
-            neighbor_sets,
-            burst_deadline,
-            rng,
-            degeneracy=degeneracy,
-            neighbor_masks=neighbor_masks,
-        )
-        candidate = extend_to_maximal_clique(adjacency_list, candidate)
-
-        burst_deadline = min(deadline, time.perf_counter() + BURST_LOCAL_SECONDS)
-        candidate = local_search(neighbor_sets, candidate, burst_deadline, rng)
-        candidate = extend_to_maximal_clique(adjacency_list, candidate)
-
-        if len(candidate) > len(best):
-            best = candidate
-            stagnation = 0
-            best = _refine_on_core(
-                best,
-                neighbor_sets,
-                adjacency_list,
-                core_numbers,
-                degeneracy,
-                neighbor_masks,
-                deadline,
-                bb_seconds * 0.5,
-                rng,
-            )
-        else:
-            stagnation += 1
-            if stagnation >= 30:
-                break
+    best = _improve_until_deadline(
+        best,
+        neighbor_sets,
+        adjacency_list,
+        core_numbers,
+        degeneracy,
+        neighbor_masks,
+        deadline,
+        bb_seconds,
+        rng,
+    )
 
     if not is_valid_maximum_clique(adjacency_list, best):
         best = [max(range(number_of_nodes), key=lambda v: len(neighbor_sets[v]))]
@@ -204,9 +237,18 @@ def _solve_single(
     return sorted(best)
 
 
-def _portfolio_worker(args: tuple[int, list[list[int]], float, int]) -> list[int]:
-    number_of_nodes, adjacency_list, time_limit, seed = args
-    return _solve_single(number_of_nodes, adjacency_list, time_limit, seed)
+def _portfolio_worker(
+    args: tuple[int, list[list[int]], float, float, int, float],
+) -> list[int]:
+    number_of_nodes, adjacency_list, budget_seconds, validator_timeout, seed, deadline = args
+    return _solve_single(
+        number_of_nodes,
+        adjacency_list,
+        budget_seconds,
+        validator_timeout,
+        seed,
+        deadline=deadline,
+    )
 
 
 def solve_maximum_clique(
@@ -218,8 +260,7 @@ def solve_maximum_clique(
     """
     Find a large maximal clique within the validator time budget.
 
-    Uses timeout-tiered phases, core-restricted search, coloring BB,
-    GRASP heuristics, and a parallel or sequential portfolio.
+    Leaves TIME_HEADROOM_SECONDS of wall-clock time before validator timeout.
     """
     if number_of_nodes != len(adjacency_list):
         raise ValueError(
@@ -232,37 +273,79 @@ def solve_maximum_clique(
     if seed is None:
         seed = int(time.perf_counter() * 1_000_000)
 
-    full_budget = time_limit * TIME_BUDGET_FRACTION
+    budget = search_budget(time_limit)
+    outer_start = time.perf_counter()
+    outer_deadline = outer_start + budget
     cpu_count = os.cpu_count() or 1
+
+    best: list[int] = []
 
     if time_limit >= PORTFOLIO_PARALLEL_MIN_TIMEOUT and cpu_count >= 4:
         tasks = [
-            (number_of_nodes, adjacency_list, full_budget, seed + i * 7919)
+            (
+                number_of_nodes,
+                adjacency_list,
+                budget,
+                time_limit,
+                seed + i * 7919,
+                outer_deadline,
+            )
             for i in range(PORTFOLIO_WORKERS)
         ]
         with ProcessPoolExecutor(max_workers=PORTFOLIO_WORKERS) as pool:
             results = list(pool.map(_portfolio_worker, tasks))
         best = max(results, key=len)
-        if is_valid_maximum_clique(adjacency_list, best):
-            return sorted(best)
-
-    if time_limit <= 6.5:
-        return _solve_single(number_of_nodes, adjacency_list, time_limit, seed)
-
-    run_budget = full_budget / 2 if time_limit < 15.0 else full_budget / PORTFOLIO_RUNS
-    runs = 2 if time_limit < 15.0 else PORTFOLIO_RUNS
-    best: list[int] = []
-    for run in range(runs):
-        candidate = _solve_single(
+    elif time_limit <= 6.5:
+        best = _solve_single(
             number_of_nodes,
             adjacency_list,
-            run_budget,
-            seed + run * 7919,
+            budget,
+            time_limit,
+            seed,
+            deadline=outer_deadline,
         )
-        if len(candidate) > len(best):
-            best = candidate
+    else:
+        run_budget = budget / 2 if time_limit < 15.0 else budget / PORTFOLIO_RUNS
+        runs = 2 if time_limit < 15.0 else PORTFOLIO_RUNS
+        for run in range(runs):
+            if time.perf_counter() >= outer_deadline:
+                break
+            candidate = _solve_single(
+                number_of_nodes,
+                adjacency_list,
+                run_budget,
+                time_limit,
+                seed + run * 7919,
+                deadline=outer_deadline,
+            )
+            if len(candidate) > len(best):
+                best = candidate
 
-    if not is_valid_maximum_clique(adjacency_list, best):
+    if best and time.perf_counter() < outer_deadline:
+        neighbor_sets = [set(neighbors) for neighbors in adjacency_list]
+        core_numbers = k_core_numbers(neighbor_sets)
+        degeneracy = degeneracy_order(neighbor_sets)
+        neighbor_masks = (
+            neighbor_sets_to_masks(neighbor_sets)
+            if number_of_nodes <= MAX_BITSET_NODES
+            else None
+        )
+        rng = random.Random(seed + 424242)
+        phases = phase_budgets(time_limit)
+        bb_seconds = max(0.5, budget * phases["bb"])
+        best = _improve_until_deadline(
+            best,
+            neighbor_sets,
+            adjacency_list,
+            core_numbers,
+            degeneracy,
+            neighbor_masks,
+            outer_deadline,
+            bb_seconds,
+            rng,
+        )
+
+    if not best or not is_valid_maximum_clique(adjacency_list, best):
         neighbor_sets = [set(neighbors) for neighbors in adjacency_list]
         best = [max(range(number_of_nodes), key=lambda v: len(neighbor_sets[v]))]
         best = extend_to_maximal_clique(adjacency_list, best)
