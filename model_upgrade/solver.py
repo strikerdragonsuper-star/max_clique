@@ -1,7 +1,7 @@
 import os
 import random
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, wait
 
 from model_upgrade.bitsets import MAX_BITSET_NODES, neighbor_sets_to_masks
 from model_upgrade.branch_bound import branch_and_bound_max_clique
@@ -292,6 +292,42 @@ def _portfolio_worker(
     )
 
 
+def _run_portfolio_parallel(
+    tasks: list[tuple[int, list[list[int]], float, float, int, float]],
+    outer_deadline: float,
+) -> list[list[int]]:
+    """Run portfolio workers with a hard wall-clock cap (avoids pool.map hangs)."""
+    remaining = outer_deadline - time.perf_counter()
+    if remaining <= 0:
+        return []
+
+    pool = ProcessPoolExecutor(max_workers=PORTFOLIO_WORKERS)
+    futures: list = []
+    try:
+        futures = [pool.submit(_portfolio_worker, task) for task in tasks]
+        done, not_done = wait(futures, timeout=remaining)
+        results: list[list[int]] = []
+        for future in done:
+            try:
+                results.append(future.result())
+            except Exception:
+                continue
+        for future in not_done:
+            future.cancel()
+        return results
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def fallback_maximum_clique(adjacency_list: list[list[int]]) -> list[int]:
+    """Fast valid maximal clique used when the main search exceeds its budget."""
+    if not adjacency_list:
+        return []
+    neighbor_sets = [set(neighbors) for neighbors in adjacency_list]
+    seed_vertex = max(range(len(neighbor_sets)), key=lambda v: len(neighbor_sets[v]))
+    return extend_to_maximal_clique(adjacency_list, [seed_vertex])
+
+
 def solve_maximum_clique(
     number_of_nodes: int,
     adjacency_list: list[list[int]],
@@ -334,9 +370,9 @@ def solve_maximum_clique(
             )
             for i in range(PORTFOLIO_WORKERS)
         ]
-        with ProcessPoolExecutor(max_workers=PORTFOLIO_WORKERS) as pool:
-            results = list(pool.map(_portfolio_worker, tasks))
-        best = max(results, key=len)
+        results = _run_portfolio_parallel(tasks, outer_deadline)
+        if results:
+            best = max(results, key=len)
     elif time_limit <= 6.5:
         best = _solve_single(
             number_of_nodes,
@@ -388,8 +424,6 @@ def solve_maximum_clique(
         )
 
     if not best or not is_valid_maximum_clique(adjacency_list, best):
-        neighbor_sets = [set(neighbors) for neighbors in adjacency_list]
-        best = [max(range(number_of_nodes), key=lambda v: len(neighbor_sets[v]))]
-        best = extend_to_maximal_clique(adjacency_list, best)
+        best = fallback_maximum_clique(adjacency_list)
 
     return sorted(best)
