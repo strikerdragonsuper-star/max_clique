@@ -17,6 +17,23 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VALIDATOR_DATA_DIR = PROJECT_ROOT / "validator_data"
 
+_TRUTHY = frozenset({"1", "true", "yes", "on", "enabled"})
+_FALSY = frozenset({"0", "false", "no", "off", "disabled"})
+
+
+def is_validator_data_enabled() -> bool:
+    """Return False when SAVE_VALIDATOR_DATA is set to a falsy value."""
+    raw = os.environ.get("SAVE_VALIDATOR_DATA", "true").strip().lower()
+    if raw in _FALSY:
+        return False
+    if raw in _TRUTHY:
+        return True
+    logger.warning(
+        "Unrecognized SAVE_VALIDATOR_DATA=%r; defaulting to enabled",
+        os.environ.get("SAVE_VALIDATOR_DATA"),
+    )
+    return True
+
 
 def validator_data_dir() -> Path:
     override = os.environ.get("VALIDATOR_DATA_DIR", "").strip()
@@ -53,6 +70,9 @@ def save_validator_record(
     data_dir: Path | None = None,
 ) -> Path | None:
     """Write one validator query/response JSON under validator_data/."""
+    if not is_validator_data_enabled():
+        return None
+
     uuid = (record.get("uuid") or "").strip()
     if not uuid:
         logger.warning("Skipping validator_data save: record has no uuid")

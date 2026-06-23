@@ -10,7 +10,11 @@ from CliqueAI.protocol import MaximumCliqueOfLambdaGraph
 from common.base.miner import BaseMinerNeuron
 
 from model_upgrade.solver import fallback_maximum_clique, solve_maximum_clique
-from model_upgrade.validator_store import build_validator_record, save_validator_record
+from model_upgrade.validator_store import (
+    build_validator_record,
+    is_validator_data_enabled,
+    save_validator_record,
+)
 
 # Reserve a little wall-clock time for axon serialization/network.
 SOLVE_RESPONSE_MARGIN_SECONDS = 0.15
@@ -101,12 +105,13 @@ class Miner(BaseMinerNeuron):
         )
         synapse.maximum_clique = maximum_clique
 
-        record = build_validator_record(
-            synapse,
-            elapsed_seconds=elapsed,
-            validator_hotkey=validator_hotkey,
-        )
-        asyncio.create_task(self._persist_validator_record(record))
+        if is_validator_data_enabled():
+            record = build_validator_record(
+                synapse,
+                elapsed_seconds=elapsed,
+                validator_hotkey=validator_hotkey,
+            )
+            asyncio.create_task(self._persist_validator_record(record))
 
         return synapse
 
