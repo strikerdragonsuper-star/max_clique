@@ -2,19 +2,25 @@
 
 
 def extend_to_maximal_clique(adjacency_list: list[list[int]], clique: list[int]) -> list[int]:
-    """Greedily extend a clique until no vertex can be added."""
+    """Greedily extend a clique, preferring highest-degree vertices first."""
     clique_set = set(clique)
     n = len(adjacency_list)
-    changed = True
-    while changed:
-        changed = False
+
+    while True:
+        best_vertex = None
+        best_degree = -1
         for vertex in range(n):
             if vertex in clique_set:
                 continue
             if clique_set.issubset(adjacency_list[vertex]):
-                clique_set.add(vertex)
-                changed = True
-                break
+                degree = len(adjacency_list[vertex])
+                if degree > best_degree:
+                    best_degree = degree
+                    best_vertex = vertex
+        if best_vertex is None:
+            break
+        clique_set.add(best_vertex)
+
     return sorted(clique_set)
 
 

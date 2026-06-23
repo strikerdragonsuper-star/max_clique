@@ -1,10 +1,13 @@
 import random
 import time
-from typing import Callable
 
-
-def _to_neighbor_sets(adjacency_list: list[list[int]]) -> list[set[int]]:
-    return [set(neighbors) for neighbors in adjacency_list]
+from model_upgrade.bitsets import (
+    MAX_BITSET_NODES,
+    mask_degree,
+    mask_intersection,
+    mask_vertices,
+    neighbor_sets_to_masks,
+)
 
 
 def greedy_clique(
@@ -21,10 +24,65 @@ def greedy_clique(
     return clique
 
 
+def greedy_clique_grasp(
+    neighbor_sets: list[set[int]],
+    rng: random.Random,
+    start_vertex: int | None = None,
+    rcl_size: int = 4,
+    neighbor_masks: list[int] | None = None,
+) -> list[int]:
+    """GRASP: repeatedly pick from the top-degree restricted candidate list."""
+    n = len(neighbor_sets)
+    use_masks = neighbor_masks is not None and n <= MAX_BITSET_NODES
+
+    clique: list[int] = []
+    if start_vertex is not None:
+        clique = [start_vertex]
+
+    if use_masks:
+        assert neighbor_masks is not None
+        if not clique:
+            candidates_mask = (1 << n) - 1
+        else:
+            candidates_mask = mask_intersection(*[neighbor_masks[v] for v in clique])
+            for v in clique:
+                candidates_mask &= ~(1 << v)
+
+        while candidates_mask:
+            candidates = mask_vertices(candidates_mask)
+            degrees = [(v, mask_degree(neighbor_masks[v])) for v in candidates]
+            degrees.sort(key=lambda item: item[1], reverse=True)
+            top = [v for v, _ in degrees[: min(rcl_size, len(degrees))]]
+            chosen = rng.choice(top)
+            clique.append(chosen)
+            candidates_mask &= neighbor_masks[chosen]
+            candidates_mask &= ~(1 << chosen)
+        return clique
+
+    clique_set = set(clique)
+    if not clique_set:
+        candidates = set(range(n))
+    else:
+        candidates = set.intersection(*(neighbor_sets[v] for v in clique_set))
+
+    while candidates:
+        ranked = sorted(candidates, key=lambda v: len(neighbor_sets[v]), reverse=True)
+        top = ranked[: min(rcl_size, len(ranked))]
+        chosen = rng.choice(top)
+        clique.append(chosen)
+        clique_set.add(chosen)
+        candidates = candidates & neighbor_sets[chosen]
+        candidates -= clique_set
+
+    return clique
+
+
 def random_restarts(
     neighbor_sets: list[set[int]],
     deadline: float,
     rng: random.Random,
+    degeneracy: list[int] | None = None,
+    neighbor_masks: list[int] | None = None,
 ) -> list[int]:
     """Run greedy construction with varied vertex orderings until the deadline."""
     n = len(neighbor_sets)
@@ -35,9 +93,13 @@ def random_restarts(
         sorted(range(n), key=lambda v: degrees[v], reverse=True),
         sorted(range(n), key=lambda v: degrees[v]),
         sorted(range(n), key=lambda v: (degrees[v], v), reverse=True),
+        sorted(range(n), key=lambda v: (-degrees[v], v)),
         list(range(n)),
         list(reversed(range(n))),
     ]
+    if degeneracy:
+        static_orders.append(list(degeneracy))
+        static_orders.append(list(reversed(degeneracy)))
 
     for order in static_orders:
         if time.perf_counter() >= deadline:
@@ -46,14 +108,49 @@ def random_restarts(
         if len(candidate) > len(best):
             best = candidate
 
+    top_starts = sorted(range(n), key=lambda v: degrees[v], reverse=True)[: min(16, n)]
+    for start in top_starts:
+        if time.perf_counter() >= deadline:
+            break
+        candidate = greedy_clique_grasp(
+            neighbor_sets,
+            rng,
+            start_vertex=start,
+            neighbor_masks=neighbor_masks,
+        )
+        if len(candidate) > len(best):
+            best = candidate
+
     while time.perf_counter() < deadline:
-        order = list(range(n))
-        rng.shuffle(order)
-        candidate = greedy_clique(neighbor_sets, order)
+        if rng.random() < 0.5 and top_starts:
+            start = rng.choice(top_starts)
+            candidate = greedy_clique_grasp(
+                neighbor_sets,
+                rng,
+                start_vertex=start,
+                rcl_size=rng.randint(3, 6),
+                neighbor_masks=neighbor_masks,
+            )
+        else:
+            order = list(range(n))
+            rng.shuffle(order)
+            candidate = greedy_clique(neighbor_sets, order)
         if len(candidate) > len(best):
             best = candidate
 
     return best
+
+
+def _swap_candidates(
+    neighbor_sets: list[set[int]],
+    base_set: set[int],
+    n: int,
+) -> list[int]:
+    return [
+        vertex
+        for vertex in range(n)
+        if vertex not in base_set and base_set.issubset(neighbor_sets[vertex])
+    ]
 
 
 def local_search(
@@ -62,7 +159,7 @@ def local_search(
     deadline: float,
     rng: random.Random,
 ) -> list[int]:
-    """Try single-vertex swaps that preserve or grow clique size."""
+    """1-swap, (1,2)-add, (2,3)-add, and plateau moves."""
     best = list(clique)
     best_set = set(best)
     n = len(neighbor_sets)
@@ -71,20 +168,67 @@ def local_search(
         if not best:
             break
 
-        remove_vertex = rng.choice(best)
-        reduced = best_set - {remove_vertex}
-        candidates = [
-            vertex
-            for vertex in range(n)
-            if vertex not in reduced and reduced.issubset(neighbor_sets[vertex])
-        ]
+        remove_vertices: list[int]
+        if rng.random() < 0.2 and len(best) >= 2:
+            ranked = sorted(best, key=lambda v: len(neighbor_sets[v]))
+            remove_vertices = ranked[:2]
+        elif rng.random() < 0.75:
+            remove_vertices = [min(best, key=lambda v: len(neighbor_sets[v]))]
+        else:
+            remove_vertices = [rng.choice(best)]
+
+        reduced = best_set - set(remove_vertices)
+        candidates = _swap_candidates(neighbor_sets, reduced, n)
         if not candidates:
             continue
 
-        add_vertex = rng.choice(candidates)
-        trial = sorted(reduced | {add_vertex})
-        if len(trial) >= len(best):
-            best = trial
-            best_set = set(best)
+        improved = False
+
+        if len(remove_vertices) == 1:
+            add_vertex = max(candidates, key=lambda v: len(neighbor_sets[v]))
+            trial = sorted(reduced | {add_vertex})
+            if len(trial) >= len(best):
+                best = trial
+                best_set = set(best)
+                improved = True
+
+            if not improved and len(best) >= 2 and rng.random() < 0.35:
+                for i, u in enumerate(candidates):
+                    for v in candidates[i + 1 :]:
+                        if v in neighbor_sets[u]:
+                            pair_trial = sorted(reduced | {u, v})
+                            if len(pair_trial) > len(best):
+                                best = pair_trial
+                                best_set = set(best)
+                                improved = True
+                                break
+                    if improved:
+                        break
+
+        if not improved and len(remove_vertices) == 2 and len(candidates) >= 3:
+            for i, u in enumerate(candidates):
+                for j in range(i + 1, len(candidates)):
+                    v = candidates[j]
+                    if v not in neighbor_sets[u]:
+                        continue
+                    for w in candidates[j + 1 :]:
+                        if w in neighbor_sets[u] and w in neighbor_sets[v]:
+                            triple = sorted(reduced | {u, v, w})
+                            if len(triple) > len(best):
+                                best = triple
+                                best_set = set(best)
+                                improved = True
+                                break
+                    if improved:
+                        break
+                if improved:
+                    break
+
+        if not improved and len(remove_vertices) == 1:
+            add_vertex = rng.choice(candidates)
+            trial = sorted(reduced | {add_vertex})
+            if len(trial) == len(best):
+                best = trial
+                best_set = set(best)
 
     return best
