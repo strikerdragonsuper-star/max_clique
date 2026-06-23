@@ -10,6 +10,13 @@ from model_upgrade.bitsets import (
 )
 
 
+def _iter_bits(mask: int):
+    while mask:
+        low = mask & -mask
+        yield low.bit_length() - 1
+        mask &= ~low
+
+
 def greedy_clique(
     neighbor_sets: list[set[int]],
     vertex_order: list[int],
@@ -230,5 +237,125 @@ def local_search(
             if len(trial) == len(best):
                 best = trial
                 best_set = set(best)
+
+    return best
+
+
+def bitset_local_search(
+    masks: list[int],
+    n: int,
+    init_clique: list[int],
+    deadline: float,
+    rng: random.Random,
+    penalties: list[int] | None = None,
+    restart_no_improve: int = 0,
+) -> list[int]:
+    """
+    Incremental bitmask local search with penalty-guided escape (DLS-MC style).
+
+    Grows the clique greedily; when maximal, attempts a (1,2)-swap, otherwise
+    penalizes current members and drops one to diversify.
+    """
+    clique = list(init_clique)
+    clique_mask = 0
+    for vertex in clique:
+        clique_mask |= 1 << vertex
+
+    best = list(clique)
+    best_size = len(clique)
+    if penalties is None:
+        penalties = [0] * n
+
+    full_mask = (1 << n) - 1
+
+    def add_set() -> int:
+        mask = full_mask
+        for vertex in clique:
+            mask &= masks[vertex]
+        return mask
+
+    add_mask = add_set()
+    no_improve = 0
+    check_counter = 0
+
+    while True:
+        check_counter += 1
+        if check_counter >= 256:
+            check_counter = 0
+            if time.perf_counter() >= deadline:
+                break
+
+        if add_mask:
+            if rng.random() < 0.7:
+                chosen = -1
+                chosen_score = None
+                for vertex in _iter_bits(add_mask):
+                    score = (masks[vertex] & add_mask).bit_count() - penalties[vertex]
+                    if chosen_score is None or score > chosen_score:
+                        chosen_score = score
+                        chosen = vertex
+            else:
+                candidates = list(_iter_bits(add_mask))
+                chosen = rng.choice(candidates)
+
+            clique.append(chosen)
+            clique_mask |= 1 << chosen
+            add_mask &= masks[chosen]
+
+            if len(clique) > best_size:
+                best = list(clique)
+                best_size = len(clique)
+                no_improve = 0
+            continue
+
+        no_improve += 1
+        improved = False
+
+        if clique:
+            for _ in range(min(len(clique), 4)):
+                pivot = rng.choice(clique)
+                mask = full_mask
+                for vertex in clique:
+                    if vertex != pivot:
+                        mask &= masks[vertex]
+                mask &= ~clique_mask
+
+                pair = None
+                for first in _iter_bits(mask):
+                    rest = masks[first] & mask & ~(1 << first)
+                    if rest:
+                        second = (rest & -rest).bit_length() - 1
+                        pair = (first, second)
+                        break
+
+                if pair is not None:
+                    first, second = pair
+                    clique.remove(pivot)
+                    clique_mask &= ~(1 << pivot)
+                    clique.extend((first, second))
+                    clique_mask |= (1 << first) | (1 << second)
+                    add_mask = add_set()
+                    if len(clique) > best_size:
+                        best = list(clique)
+                        best_size = len(clique)
+                        no_improve = 0
+                    improved = True
+                    break
+
+        if not improved and clique:
+            for vertex in clique:
+                penalties[vertex] += 1
+            drop = max(clique, key=lambda u: (penalties[u], rng.random()))
+            clique.remove(drop)
+            clique_mask &= ~(1 << drop)
+            add_mask = add_set()
+
+        if restart_no_improve and no_improve >= restart_no_improve:
+            clique = list(best)
+            clique_mask = 0
+            for vertex in clique:
+                clique_mask |= 1 << vertex
+            add_mask = add_set()
+            no_improve = 0
 
     return best

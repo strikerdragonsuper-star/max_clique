@@ -1,33 +1,9 @@
 import time
 
+from model_upgrade.bitsets import neighbor_sets_to_masks
 
-def _greedy_color_order(
-    vertices: list[int],
-    neighbor_sets: list[set[int]],
-) -> tuple[list[int], int]:
-    """Greedy coloring; returns vertices sorted by color and the color count."""
-    if not vertices:
-        return [], 0
-
-    vertex_set = set(vertices)
-    ordered_by_degree = sorted(
-        vertices,
-        key=lambda v: len(neighbor_sets[v] & vertex_set),
-        reverse=True,
-    )
-    color_of: dict[int, int] = {}
-    max_color = 0
-
-    for vertex in ordered_by_degree:
-        used = {color_of[neighbor] for neighbor in neighbor_sets[vertex] if neighbor in color_of}
-        color = 0
-        while color in used:
-            color += 1
-        color_of[vertex] = color
-        max_color = max(max_color, color)
-
-    sorted_vertices = sorted(vertices, key=lambda v: color_of[v], reverse=True)
-    return sorted_vertices, max_color + 1
+# Check the wall clock every this many expand() calls (perf_counter is not free).
+_TIME_CHECK_INTERVAL = 2048
 
 
 def branch_and_bound_max_clique(
@@ -36,49 +12,73 @@ def branch_and_bound_max_clique(
     deadline: float,
 ) -> list[int]:
     """
-    Time-limited branch-and-bound with greedy-coloring upper bound (Tomita-style).
+    Time-limited bitset branch-and-bound (Tomita MCS-style).
+
+    Operates on integer bitmasks with a greedy-coloring upper bound, branching
+    vertices in non-increasing color order so the first prune cuts the tail.
     """
     n = len(neighbor_sets)
     if n == 0:
         return []
 
+    masks = neighbor_sets_to_masks(neighbor_sets)
     best = list(lower_bound)
     best_size = len(best)
 
-    candidates = [v for v in range(n) if len(neighbor_sets[v]) >= best_size - 1]
-    if len(candidates) > 280:
-        candidates = sorted(
-            candidates,
-            key=lambda v: len(neighbor_sets[v]),
-            reverse=True,
-        )[:280]
+    candidate_mask = 0
+    for v in range(n):
+        if len(neighbor_sets[v]) >= best_size - 1:
+            candidate_mask |= 1 << v
 
-    def search(remaining: list[int], current: list[int], current_set: set[int]) -> None:
+    counter = [0]
+    timed_out = [False]
+
+    def expand(r_list: list[int], r_size: int, candidates: int) -> None:
+        if timed_out[0]:
+            return
+
+        counter[0] += 1
+        if counter[0] >= _TIME_CHECK_INTERVAL:
+            counter[0] = 0
+            if time.perf_counter() >= deadline:
+                timed_out[0] = True
+                return
+
+        # Greedy coloring of `candidates`; produce vertices in color order.
+        order: list[int] = []
+        color_of: list[int] = []
+        uncolored = candidates
+        color = 0
+        while uncolored:
+            color += 1
+            available = uncolored
+            while available:
+                low = available & -available
+                vertex = low.bit_length() - 1
+                order.append(vertex)
+                color_of.append(color)
+                uncolored &= ~low
+                available &= ~low
+                available &= ~masks[vertex]
+
         nonlocal best, best_size
+        for i in range(len(order) - 1, -1, -1):
+            if timed_out[0]:
+                return
+            if r_size + color_of[i] <= best_size:
+                return
 
-        if time.perf_counter() >= deadline:
-            return
+            vertex = order[i]
+            new_size = r_size + 1
+            if new_size > best_size:
+                best = r_list + [vertex]
+                best_size = new_size
 
-        if not remaining:
-            if len(current) > best_size:
-                best = list(current)
-                best_size = len(current)
-            return
+            next_candidates = candidates & masks[vertex]
+            if next_candidates:
+                expand(r_list + [vertex], new_size, next_candidates)
 
-        ordered, color_bound = _greedy_color_order(remaining, neighbor_sets)
-        if len(current) + color_bound <= best_size:
-            return
+            candidates &= ~(1 << vertex)
 
-        vertex = ordered[0]
-        rest = [v for v in ordered if v != vertex]
-
-        if not current_set or current_set.issubset(neighbor_sets[vertex]):
-            new_current = current + [vertex]
-            new_set = current_set | {vertex}
-            new_remaining = [u for u in rest if u in neighbor_sets[vertex]]
-            search(new_remaining, new_current, new_set)
-
-        search(rest, current, current_set)
-
-    search(candidates, [], set())
+    expand([], 0, candidate_mask)
     return best

@@ -1,60 +1,76 @@
 """Graph preprocessing: k-core, degeneracy order, induced subgraphs."""
 
 
-def k_core_numbers(neighbor_sets: list[set[int]]) -> list[int]:
-    """Return the core number of each vertex."""
+def core_and_degeneracy(
+    neighbor_sets: list[set[int]],
+) -> tuple[list[int], list[int]]:
+    """
+    Batagelj-Zaversnik O(n+m) core decomposition.
+
+    Returns (core_numbers, degeneracy_order). The removal order is the
+    degeneracy order; the core number is each vertex's value at removal.
+    """
     n = len(neighbor_sets)
     if n == 0:
-        return []
+        return [], []
 
     degrees = [len(neighbor_sets[v]) for v in range(n)]
+    max_degree = max(degrees)
+
+    # Bin-sort vertices by current degree.
+    bin_start = [0] * (max_degree + 2)
+    for v in range(n):
+        bin_start[degrees[v]] += 1
+    start = 0
+    for d in range(max_degree + 1):
+        count = bin_start[d]
+        bin_start[d] = start
+        start += count
+
+    position = [0] * n
+    vertices = [0] * n
+    for v in range(n):
+        position[v] = bin_start[degrees[v]]
+        vertices[position[v]] = v
+        bin_start[degrees[v]] += 1
+
+    # Restore bin starts.
+    for d in range(max_degree + 1, 0, -1):
+        bin_start[d] = bin_start[d - 1]
+    bin_start[0] = 0
+
     core = degrees[:]
-    remaining = [True] * n
-    remaining_count = n
+    order: list[int] = []
 
-    while remaining_count > 0:
-        min_vertex = min(
-            (v for v in range(n) if remaining[v]),
-            key=lambda v: core[v],
-        )
-        min_core = core[min_vertex]
-        stack = [min_vertex]
-        remaining[min_vertex] = False
-        remaining_count -= 1
+    for i in range(n):
+        vertex = vertices[i]
+        order.append(vertex)
+        for neighbor in neighbor_sets[vertex]:
+            if core[neighbor] > core[vertex]:
+                deg_n = core[neighbor]
+                pos_n = position[neighbor]
+                pos_first = bin_start[deg_n]
+                first = vertices[pos_first]
+                if neighbor != first:
+                    position[neighbor] = pos_first
+                    vertices[pos_n] = first
+                    position[first] = pos_n
+                    vertices[pos_first] = neighbor
+                bin_start[deg_n] += 1
+                core[neighbor] -= 1
 
-        while stack:
-            vertex = stack.pop()
-            for neighbor in neighbor_sets[vertex]:
-                if not remaining[neighbor]:
-                    continue
-                if core[neighbor] > min_core:
-                    core[neighbor] -= 1
-                    if core[neighbor] == min_core:
-                        stack.append(neighbor)
-                        remaining[neighbor] = False
-                        remaining_count -= 1
+    return core, order
 
+
+def k_core_numbers(neighbor_sets: list[set[int]]) -> list[int]:
+    """Return the core number of each vertex."""
+    core, _ = core_and_degeneracy(neighbor_sets)
     return core
 
 
 def degeneracy_order(neighbor_sets: list[set[int]]) -> list[int]:
-    """Vertices in degeneracy order (minimum degree removal)."""
-    n = len(neighbor_sets)
-    if n == 0:
-        return []
-
-    degrees = [len(neighbor_sets[v]) for v in range(n)]
-    removed = [False] * n
-    order: list[int] = []
-
-    for _ in range(n):
-        vertex = min((v for v in range(n) if not removed[v]), key=lambda v: degrees[v])
-        order.append(vertex)
-        removed[vertex] = True
-        for neighbor in neighbor_sets[vertex]:
-            if not removed[neighbor]:
-                degrees[neighbor] -= 1
-
+    """Vertices in degeneracy order (minimum-degree removal)."""
+    _, order = core_and_degeneracy(neighbor_sets)
     return order
 
 
