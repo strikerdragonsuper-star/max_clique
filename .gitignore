@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+miner.env
+validator_output/
+validator_data/
+test_data/
+test_output/
