@@ -13,15 +13,8 @@ if [ -f "$SCRIPT_DIR/miner.env" ]; then
     set +a
 fi
 
-INSTALL_ARGS=(--skip-benchmark)
-case "${MODEL_UPGRADE_USE_RUST:-}" in
-    1|true|TRUE|yes|YES|on|ON|enabled|ENABLED)
-        INSTALL_ARGS+=(--with-rust)
-        ;;
-esac
-
 echo "Installing/updating miner dependencies..."
-"$SCRIPT_DIR/install.sh" "${INSTALL_ARGS[@]}"
+"$SCRIPT_DIR/install.sh" --skip-benchmark
 
 if [ ! -d "$CLIQUE_ROOT" ]; then
     echo "CliqueAI repo not found at $CLIQUE_ROOT" >&2

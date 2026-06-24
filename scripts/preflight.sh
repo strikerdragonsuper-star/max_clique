@@ -75,8 +75,8 @@ fi
 
 VENV_PYTHON="$PROJECT_ROOT/venv/bin/python"
 if [ -x "$VENV_PYTHON" ]; then
-    if "$VENV_PYTHON" -c "import model_upgrade, model_upgrade.miner, CliqueAI.miner" 2>/dev/null; then
-        ok "model_upgrade and CliqueAI importable in venv"
+    if "$VENV_PYTHON" -c "import model_upgrade, model_upgrade_rs, model_upgrade.miner, CliqueAI.miner" 2>/dev/null; then
+        ok "model_upgrade (rust), model_upgrade_rs, and CliqueAI importable in venv"
     else
         warn "venv exists but packages missing; run ./install.sh --skip-benchmark"
     fi

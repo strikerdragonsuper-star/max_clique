@@ -1,25 +1,45 @@
 # model-upgrade
 
-Competitive maximum clique solver and miner stack for [Bittensor subnet 83 (CliqueAI)](https://github.com/toptensor/CliqueAI).
+Rust maximum clique solver and miner stack for [Bittensor subnet 83 (CliqueAI)](https://github.com/toptensor/CliqueAI).
+
+The solver lives in **`crates/model_upgrade_core/`**. Python is only used for the Bittensor miner entrypoint and benchmark scripts (graph codec from CliqueAI).
+
+## Project layout
+
+```
+model-upgrade/
+├── Cargo.toml                      # Rust workspace
+├── crates/
+│   ├── model_upgrade_core/         # solver engine (edit here)
+│   └── model_upgrade_py/           # PyO3 bindings → model_upgrade_rs
+├── model_upgrade/
+│   ├── miner.py                    # Bittensor miner (thin wrapper)
+│   └── validator_store.py          # save validator queries
+└── scripts/
+    ├── benchmark.py                # offline benchmark
+    └── preflight_submit.py         # pre-deploy checks
+```
+
+## Rust development
+
+```bash
+cargo build -p model_upgrade_core --release
+cargo test -p model_upgrade_core
+cd crates/model_upgrade_py && maturin develop --release
+```
+
+Tune solver constants in `crates/model_upgrade_core/src/solver.rs`.
 
 ## Deploy miner on subnet 83 (Linux)
 
-Production mining requires **Ubuntu 24.04**, **Python 3.12+**, and a **public IP** with an open axon port.
+Production mining requires **Ubuntu 24.04**, **Python 3.12+**, **Rust**, and a **public IP** with an open axon port.
 
 ### 1. Clone repos
 
 ```bash
 mkdir -p ~/bittensor/83 && cd ~/bittensor/83
 git clone https://github.com/toptensor/CliqueAI.git
-git clone <your-model-upgrade-repo> model-upgrade   # or copy this folder
-```
-
-Layout:
-
-```
-83/
-├── CliqueAI/       # upstream subnet repo (miner entrypoint)
-└── model-upgrade/  # your solver + deploy scripts
+git clone <your-model-upgrade-repo> model-upgrade
 ```
 
 ### 2. Register on subnet 83
@@ -42,6 +62,7 @@ cp miner.env.example miner.env
 chmod +x install.sh start_miner.sh scripts/preflight.sh
 ./install.sh --skip-benchmark
 ./scripts/preflight.sh
+python scripts/preflight_submit.py
 ```
 
 ### 5. Start miner
@@ -57,7 +78,7 @@ pm2 logs miner-cliqueAI-sn83
 pm2 status
 ```
 
-The miner uses `synapse.timeout` from validators (sampled from `{6, 7.5, 10, 15, 30}` seconds per tier) and runs the `model_upgrade` solver.
+The miner logs `Solver backend: rust` at startup.
 
 ### Firewall
 
@@ -65,64 +86,30 @@ Open your axon port (default `8091/tcp`) on the host and cloud security group.
 
 ## Local development (Windows)
 
-Solver-only install and benchmark (no Bittensor stack on Windows):
-
 ```powershell
-.\install.ps1
-.\venv\Scripts\python.exe scripts\benchmark.py
-```
-
-### Rust solver (optional)
-
-The repo includes a Rust port in `crates/` (same algorithm as the Python engine). Build with [maturin](https://www.maturin.rs/):
-
-```powershell
-.\install.ps1 -SkipBenchmark -WithRust
-$env:MODEL_UPGRADE_USE_RUST = "1"
+.\install.ps1 -SkipBenchmark
 .\venv\Scripts\python.exe scripts\benchmark.py --validator-data
-```
-
-Compare Python vs Rust on validator graphs:
-
-```powershell
-.\venv\Scripts\python.exe scripts\compare_rust_python.py --data-dir validator_data
-```
-
-Pre-submit check (Rust enabled + validator benchmark):
-
-```powershell
-$env:MODEL_UPGRADE_USE_RUST = "1"
 .\venv\Scripts\python.exe scripts\preflight_submit.py
-```
-
-Linux:
-
-```bash
-./install.sh --skip-benchmark --with-rust
-export MODEL_UPGRADE_USE_RUST=1
-python scripts/preflight_submit.py
-./start_miner.sh
 ```
 
 ## Benchmark
 
-Uses local `test_data/` and saves results to `test_output/`:
+Uses local `test_data/` or `validator_data/` and saves results to `test_output/`:
 
 ```bash
 source venv/bin/activate
 python scripts/benchmark.py
+python scripts/benchmark.py --validator-data
 python scripts/benchmark.py --timeout 30
-python scripts/download_test_data.py
 ```
 
 ## Solver strategy
 
 1. Multi-start greedy construction with varied vertex orderings
 2. Randomized local search
-3. Branch-and-bound on graphs with ≤420 nodes when time remains
-4. Maximality extension and validator-compatible validation before return
-
-Tune defaults in `model_upgrade/solver.py`.
+3. Branch-and-bound on reduced cores when time remains
+4. Dense-graph complement MIS mode for high-density instances
+5. Maximality extension and validation before return
 
 ## Hardware (from CliqueAI)
 
@@ -141,6 +128,6 @@ Tune defaults in `model_upgrade/solver.py`.
 | Restart miner | `pm2 restart miner-cliqueAI-sn83` |
 | Stop miner | `pm2 stop miner-cliqueAI-sn83` |
 | Update deps | `./install.sh --skip-benchmark && pm2 restart miner-cliqueAI-sn83` |
-| Re-run checks | `./scripts/preflight.sh` |
+| Re-run checks | `./scripts/preflight.sh && python scripts/preflight_submit.py` |
 
 Avoid frequent axon re-registration on-chain; recently updated miners are excluded from validator queries for ~1 epoch.

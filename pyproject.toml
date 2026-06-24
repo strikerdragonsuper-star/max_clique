@@ -5,16 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "model-upgrade"
 version = "0.2.0"
-description = "Competitive maximum clique solver for Bittensor subnet 83 (CliqueAI)"
+description = "Rust maximum clique solver and miner for Bittensor subnet 83 (CliqueAI)"
 requires-python = ">=3.12"
 dependencies = [
-    "numpy>=2.0",
     "pydantic>=2",
 ]
 
 [project.optional-dependencies]
 dev = ["maturin>=1.7"]
-rust = ["maturin>=1.7"]
 
 [tool.setuptools.packages.find]
 include = ["model_upgrade*"]

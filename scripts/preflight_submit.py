@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Pre-submit checks: Rust solver enabled, extension installed, validator benchmark."""
+"""Pre-submit checks: Rust solver installed, smoke test, validator benchmark."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -30,29 +29,11 @@ from model_upgrade import (  # noqa: E402
 from benchmark import TestSynapse, load_reference_clique  # noqa: E402
 
 
-def env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "enabled",
-    }
-
-
-def check_backend(require_rust: bool) -> None:
+def check_backend() -> None:
     backend = solver_backend()
-    print(f"MODEL_UPGRADE_USE_RUST={os.environ.get('MODEL_UPGRADE_USE_RUST', '(unset)')}")
     print(f"Active solver backend: {backend}")
-
-    if require_rust and not env_flag("MODEL_UPGRADE_USE_RUST"):
-        raise SystemExit("MODEL_UPGRADE_USE_RUST is not enabled (set in miner.env)")
-
-    if require_rust and backend != "rust":
-        raise SystemExit(
-            "Rust backend not active. Build the extension:\n"
-            "  cd crates/model_upgrade_py && maturin develop --release"
-        )
+    if backend != "rust":
+        raise SystemExit("Expected rust backend")
 
 
 def smoke_test() -> None:
@@ -160,16 +141,11 @@ def main() -> None:
         action="store_true",
         help="Only check backend + smoke test",
     )
-    parser.add_argument(
-        "--allow-python",
-        action="store_true",
-        help="Do not require MODEL_UPGRADE_USE_RUST=1",
-    )
     args = parser.parse_args()
 
     print("Pre-submit solver check")
     print("=" * 88)
-    check_backend(require_rust=not args.allow_python)
+    check_backend()
     smoke_test()
 
     if args.skip_benchmark:

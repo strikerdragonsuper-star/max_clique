@@ -1,7 +1,6 @@
 param(
     [switch]$SkipBenchmark,
-    [switch]$FullCliqueAI,
-    [switch]$WithRust
+    [switch]$FullCliqueAI
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +16,10 @@ if (-not (Test-Path $CliqueRoot)) {
     throw "CliqueAI repo not found at $CliqueRoot"
 }
 
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    throw "Rust toolchain not found. Install from https://rustup.rs/"
+}
+
 if (-not (Test-Path $VenvDir)) {
     python -m venv $VenvDir
 }
@@ -28,21 +31,14 @@ $Pip = Join-Path $VenvDir "Scripts\pip.exe"
 & $Pip install -e $ProjectRoot
 & $Pip install pydantic
 
-if ($WithRust) {
-    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        throw "Rust toolchain not found. Install from https://rustup.rs/"
-    }
-    Write-Host "Building Rust solver extension (maturin)..."
-    & $Pip install maturin
-    $Maturin = Join-Path $VenvDir "Scripts\maturin.exe"
-    Push-Location (Join-Path $ProjectRoot "crates\model_upgrade_py")
-    try {
-        & $Maturin develop --release
-    } finally {
-        Pop-Location
-    }
-    Write-Host "Rust extension installed as model_upgrade_rs"
-    Write-Host "Enable with: `$env:MODEL_UPGRADE_USE_RUST = '1'"
+Write-Host "Building Rust solver extension (maturin)..."
+& $Pip install maturin
+$Maturin = Join-Path $VenvDir "Scripts\maturin.exe"
+Push-Location (Join-Path $ProjectRoot "crates\model_upgrade_py")
+try {
+    & $Maturin develop --release
+} finally {
+    Pop-Location
 }
 
 if ($FullCliqueAI) {
@@ -54,6 +50,7 @@ if ($FullCliqueAI) {
 }
 
 Write-Host ""
+Write-Host "Solver: rust (model_upgrade_rs)"
 Write-Host "Activate with: .\venv\Scripts\Activate.ps1"
 
 if (-not $SkipBenchmark) {

@@ -5,13 +5,12 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIQUE_ROOT="$(cd "$PROJECT_ROOT/../CliqueAI" && pwd)"
 VENV_DIR="$PROJECT_ROOT/venv"
 RUN_BENCHMARK=0
-WITH_RUST=0
 
 for arg in "$@"; do
     case "$arg" in
         --skip-benchmark) RUN_BENCHMARK=0 ;;
         --with-benchmark) RUN_BENCHMARK=1 ;;
-        --with-rust) WITH_RUST=1 ;;
+        --with-rust) ;; # kept for compatibility; Rust is always built
     esac
 done
 
@@ -26,6 +25,11 @@ if [ ! -d "$CLIQUE_ROOT" ]; then
     exit 1
 fi
 
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "Rust toolchain not found. Install from https://rustup.rs/" >&2
+    exit 1
+fi
+
 if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"
 fi
@@ -36,21 +40,14 @@ python -m pip install --upgrade pip
 pip install -e "$CLIQUE_ROOT"
 pip install -e "$PROJECT_ROOT"
 
-if [ "$WITH_RUST" -eq 1 ]; then
-    if ! command -v cargo >/dev/null 2>&1; then
-        echo "Rust toolchain not found. Install from https://rustup.rs/" >&2
-        exit 1
-    fi
-    echo "Building Rust solver extension (maturin)..."
-    pip install maturin
-    (cd "$PROJECT_ROOT/crates/model_upgrade_py" && maturin develop --release)
-    echo "Rust extension installed as model_upgrade_rs"
-    echo "Enable with: export MODEL_UPGRADE_USE_RUST=1"
-fi
+echo "Building Rust solver extension (maturin)..."
+pip install maturin
+(cd "$PROJECT_ROOT/crates/model_upgrade_py" && maturin develop --release)
 
 echo
 echo "Install complete."
 echo "  venv: $VENV_DIR"
+echo "  solver: rust (model_upgrade_rs)"
 echo "  activate: source venv/bin/activate"
 
 if [ "$RUN_BENCHMARK" -eq 1 ]; then
