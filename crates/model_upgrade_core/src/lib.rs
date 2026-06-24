@@ -6,5 +6,5 @@ pub mod heuristics;
 pub mod solver;
 pub mod validation;
 
-pub use solver::{fallback_maximum_clique, search_budget, solve_maximum_clique};
+pub use solver::{fallback_maximum_clique, search_budget, solve_maximum_clique, time_headroom};
 pub use validation::{extend_to_maximal_clique, is_valid_maximum_clique};

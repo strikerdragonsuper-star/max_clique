@@ -5,10 +5,12 @@ use rand::prelude::*;
 use rand::rngs::StdRng;
 
 use crate::bitsets::{mask_degree, neighbor_sets_to_masks, BitMask, MAX_BITSET_NODES};
-use crate::graph_utils::core_and_degeneracy;
+use crate::branch_bound::branch_and_bound_max_independent_set;
+use crate::graph_utils::{core_and_degeneracy, extract_subgraph, map_clique_to_original};
 use crate::validation::{extend_to_maximal_clique, is_valid_maximum_clique};
 
-pub const DENSE_DEGREE_RATIO: f64 = 0.70;
+pub const DENSE_DEGREE_RATIO: f64 = 0.68;
+const MIS_BB_CORE_MAX: usize = 200;
 
 pub fn is_dense_graph(neighbor_sets: &[HashSet<usize>], threshold: f64) -> bool {
     let n = neighbor_sets.len();
@@ -449,6 +451,75 @@ pub fn mis_bitset_local_search(
     best
 }
 
+/// Exact clique search on dense graphs via max independent set on the complement.
+pub fn exact_complement_clique(
+    adjacency_list: &[Vec<usize>],
+    lower_bound: &[usize],
+    deadline: Instant,
+) -> Vec<usize> {
+    let neighbor_sets: Vec<HashSet<usize>> = adjacency_list
+        .iter()
+        .map(|n| n.iter().copied().collect())
+        .collect();
+    let n = neighbor_sets.len();
+    if n == 0 || Instant::now() >= deadline {
+        return lower_bound.to_vec();
+    }
+
+    let comp_neighbors = complement_neighbor_sets(&neighbor_sets);
+    let (core_numbers, _) = core_and_degeneracy(&comp_neighbors);
+    let lb_size = lower_bound.len().max(1);
+
+    let mut core_vertices: HashSet<usize> = lower_bound.iter().copied().collect();
+    if !lower_bound.is_empty() {
+        let common: HashSet<usize> = lower_bound
+            .iter()
+            .map(|&v| neighbor_sets[v].clone())
+            .reduce(|a, b| a.intersection(&b).copied().collect())
+            .unwrap_or_default();
+        core_vertices.extend(common);
+    }
+    if core_vertices.len() < lb_size + 8 {
+        let mut extras: Vec<usize> = (0..n)
+            .filter(|&v| core_numbers[v] >= lb_size.saturating_sub(2))
+            .collect();
+        extras.sort_by_key(|&v| std::cmp::Reverse(comp_neighbors[v].len()));
+        for v in extras {
+            if core_vertices.len() >= MIS_BB_CORE_MAX {
+                break;
+            }
+            core_vertices.insert(v);
+        }
+    }
+
+    let mut core_vertices: Vec<usize> = core_vertices.into_iter().collect();
+    core_vertices.sort_unstable();
+    if core_vertices.len() > MIS_BB_CORE_MAX {
+        core_vertices.sort_by_key(|&v| std::cmp::Reverse(core_numbers[v]));
+        core_vertices.truncate(MIS_BB_CORE_MAX);
+        core_vertices.sort_unstable();
+    }
+
+    if core_vertices.len() <= lb_size {
+        return lower_bound.to_vec();
+    }
+
+    let (sub_comp, labels) = extract_subgraph(&comp_neighbors, &core_vertices);
+    let sub_lb: Vec<usize> = lower_bound
+        .iter()
+        .filter_map(|&v| labels.iter().position(|&l| l == v))
+        .collect();
+
+    let exact_is = branch_and_bound_max_independent_set(&sub_comp, &sub_lb, deadline);
+    let mut mapped = map_clique_to_original(&exact_is, &labels);
+    mapped = extend_to_maximal_clique(adjacency_list, &mapped);
+    if mapped.len() > lower_bound.len() {
+        mapped
+    } else {
+        lower_bound.to_vec()
+    }
+}
+
 pub fn solve_dense_complement(
     adjacency_list: &[Vec<usize>],
     budget_seconds: f64,
@@ -532,6 +603,24 @@ pub fn solve_dense_complement(
         candidate = extend_to_maximal_clique(adjacency_list, &mis);
         if candidate.len() > clique.len() {
             clique = candidate;
+        }
+    }
+
+    if n <= MIS_BB_CORE_MAX && Instant::now() < deadline {
+        let bb_deadline = deadline;
+        let exact = exact_complement_clique(adjacency_list, &clique, bb_deadline);
+        if exact.len() > clique.len() {
+            clique = exact;
+        }
+    } else if Instant::now() < deadline {
+        let remaining = (deadline - Instant::now()).as_secs_f64();
+        if remaining >= 0.25 {
+            let bb_deadline =
+                deadline.min(Instant::now() + std::time::Duration::from_secs_f64(remaining * 0.35));
+            let exact = exact_complement_clique(adjacency_list, &clique, bb_deadline);
+            if exact.len() > clique.len() {
+                clique = exact;
+            }
         }
     }
 

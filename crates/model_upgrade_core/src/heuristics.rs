@@ -337,6 +337,7 @@ pub fn bitset_local_search(
 
     let mut no_improve = 0usize;
     let mut check_counter = 0u32;
+    let mut tabu = vec![0u8; n];
 
     loop {
         check_counter += 1;
@@ -344,6 +345,11 @@ pub fn bitset_local_search(
             check_counter = 0;
             if Instant::now() >= deadline {
                 break;
+            }
+            for t in tabu.iter_mut() {
+                if *t > 0 {
+                    *t -= 1;
+                }
             }
         }
 
@@ -353,7 +359,10 @@ pub fn bitset_local_search(
                 let mut best_score = i32::MIN;
                 let mut first = true;
                 for vertex in add_mask.iter_bits() {
-                    let score = (masks[vertex].and(add_mask).count() as i32) - penalties[vertex];
+                    let tabu_penalty = i32::from(tabu[vertex]) * 1000;
+                    let score = (masks[vertex].and(add_mask).count() as i32)
+                        - penalties[vertex]
+                        - tabu_penalty;
                     if first || score > best_score {
                         best_score = score;
                         best_vertex = vertex;
@@ -441,6 +450,7 @@ pub fn bitset_local_search(
                 .unwrap();
             clique.retain(|&v| v != drop);
             clique_mask.clear(drop);
+            tabu[drop] = 3;
             add_mask = {
                 let mut m = full_mask;
                 for &vertex in &clique {
@@ -463,9 +473,40 @@ pub fn bitset_local_search(
                 }
                 m
             };
+            tabu.fill(0);
             no_improve = 0;
         }
     }
 
     best
+}
+
+pub fn merge_clique_candidates(
+    neighbor_sets: &[HashSet<usize>],
+    results: &[Vec<usize>],
+) -> Vec<usize> {
+    if results.is_empty() {
+        return vec![];
+    }
+    let mut sorted: Vec<&Vec<usize>> = results.iter().collect();
+    sorted.sort_by_key(|r| std::cmp::Reverse(r.len()));
+    let best = sorted[0].clone();
+    if sorted.len() < 2 || best.is_empty() {
+        return best;
+    }
+
+    let mut union: HashSet<usize> = sorted[0].iter().copied().collect();
+    union.extend(sorted[1].iter().copied());
+    if sorted.len() >= 3 {
+        union.extend(sorted[2].iter().copied());
+    }
+
+    let mut order: Vec<usize> = union.into_iter().collect();
+    order.sort_by_key(|&v| std::cmp::Reverse(neighbor_sets[v].len()));
+    let merged = greedy_clique(neighbor_sets, &order);
+    if merged.len() > best.len() {
+        merged
+    } else {
+        best
+    }
 }

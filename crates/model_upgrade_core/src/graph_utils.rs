@@ -66,7 +66,17 @@ pub fn build_search_core(
     neighbor_sets: &[HashSet<usize>],
     core_numbers: &[usize],
 ) -> Vec<usize> {
-    let min_core = clique.len().saturating_sub(1);
+    build_search_core_with_slack(clique, neighbor_sets, core_numbers, 1)
+}
+
+/// Build a search core around `clique` with configurable slack on k-core filtering.
+pub fn build_search_core_with_slack(
+    clique: &[usize],
+    neighbor_sets: &[HashSet<usize>],
+    core_numbers: &[usize],
+    slack: usize,
+) -> Vec<usize> {
+    let min_core = clique.len().saturating_sub(slack);
     let mut vertices: HashSet<usize> = clique.iter().copied().collect();
     if !clique.is_empty() {
         let common: HashSet<usize> = clique
@@ -81,6 +91,33 @@ pub fn build_search_core(
         .filter(|&v| core_numbers[v] >= min_core)
         .collect();
     out.sort_unstable();
+    out
+}
+
+/// Widen an existing vertex set with high-core vertices (iterative core expansion).
+pub fn expand_core_vertices(
+    core_vertices: &[usize],
+    neighbor_sets: &[HashSet<usize>],
+    core_numbers: &[usize],
+    best_size: usize,
+    max_vertices: usize,
+    extra: usize,
+) -> Vec<usize> {
+    let mut combined: HashSet<usize> = core_vertices.iter().copied().collect();
+    let min_core = best_size.saturating_sub(3);
+    let mut extras: Vec<usize> = (0..neighbor_sets.len())
+        .filter(|&v| !combined.contains(&v) && core_numbers[v] >= min_core)
+        .collect();
+    extras.sort_by_key(|&v| std::cmp::Reverse(neighbor_sets[v].len()));
+    extras.truncate(extra);
+    combined.extend(extras);
+    let mut out: Vec<usize> = combined.into_iter().collect();
+    out.sort_unstable();
+    if out.len() > max_vertices {
+        out.sort_by_key(|&v| std::cmp::Reverse(core_numbers[v]));
+        out.truncate(max_vertices);
+        out.sort_unstable();
+    }
     out
 }
 
