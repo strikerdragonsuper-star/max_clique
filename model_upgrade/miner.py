@@ -9,7 +9,11 @@ from CliqueAI.graph.codec import GraphCodec
 from CliqueAI.protocol import MaximumCliqueOfLambdaGraph
 from common.base.miner import BaseMinerNeuron
 
-from model_upgrade.solver import fallback_maximum_clique, solve_maximum_clique
+from model_upgrade import (
+    fallback_maximum_clique,
+    solve_maximum_clique,
+    solver_backend,
+)
 from model_upgrade.validator_store import (
     build_validator_record,
     is_validator_data_enabled,
@@ -55,6 +59,7 @@ class Miner(BaseMinerNeuron):
             blacklist_fn=self.backlist_graph,
             priority_fn=self.priority_graph,
         )
+        bt.logging.info(f"Solver backend: {solver_backend()}")
         if is_validator_data_enabled():
             bt.logging.info("Validator data saving is enabled")
         else:

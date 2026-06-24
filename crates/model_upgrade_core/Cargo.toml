@@ -1,0 +1,11 @@
+[package]
+name = "model_upgrade_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "High-performance maximum clique solver for Bittensor subnet 83"
+
+[dependencies]
+rand = "0.9"
+sha2 = "0.10"
+rayon = "1.10"

@@ -8,4 +8,8 @@ validator_output/
 validator_data/
 test_data/
 test_output/
+compare_output/
 output.txt
+
+# Rust
+/target/

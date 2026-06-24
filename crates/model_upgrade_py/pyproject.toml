@@ -1,0 +1,12 @@
+[build-system]
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
+
+[project]
+name = "model-upgrade-rs"
+version = "0.2.0"
+description = "Rust maximum clique solver extension for model-upgrade"
+requires-python = ">=3.12"
+
+[tool.maturin]
+module-name = "model_upgrade_rs"

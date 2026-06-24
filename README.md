@@ -72,6 +72,38 @@ Solver-only install and benchmark (no Bittensor stack on Windows):
 .\venv\Scripts\python.exe scripts\benchmark.py
 ```
 
+### Rust solver (optional)
+
+The repo includes a Rust port in `crates/` (same algorithm as the Python engine). Build with [maturin](https://www.maturin.rs/):
+
+```powershell
+.\install.ps1 -SkipBenchmark -WithRust
+$env:MODEL_UPGRADE_USE_RUST = "1"
+.\venv\Scripts\python.exe scripts\benchmark.py --validator-data
+```
+
+Compare Python vs Rust on validator graphs:
+
+```powershell
+.\venv\Scripts\python.exe scripts\compare_rust_python.py --data-dir validator_data
+```
+
+Pre-submit check (Rust enabled + validator benchmark):
+
+```powershell
+$env:MODEL_UPGRADE_USE_RUST = "1"
+.\venv\Scripts\python.exe scripts\preflight_submit.py
+```
+
+Linux:
+
+```bash
+./install.sh --skip-benchmark --with-rust
+export MODEL_UPGRADE_USE_RUST=1
+python scripts/preflight_submit.py
+./start_miner.sh
+```
+
 ## Benchmark
 
 Uses local `test_data/` and saves results to `test_output/`:

@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/model_upgrade_core", "crates/model_upgrade_py"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"

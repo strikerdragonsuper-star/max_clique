@@ -13,7 +13,11 @@ LOCAL_TEST_DATA = ROOT / "test_data"
 sys.path.insert(0, str(CLIQUE_ROOT))
 
 from CliqueAI.graph.codec import GraphCodec  # noqa: E402
-from model_upgrade import is_valid_maximum_clique, solve_maximum_clique  # noqa: E402
+from model_upgrade import (  # noqa: E402
+    is_valid_maximum_clique,
+    solve_maximum_clique,
+    solver_backend,
+)
 
 # Subnet 83 problem tiers (matches CliqueAI.selection.problem_selector.PROBLEMS).
 SUBNET_DIFFICULTY_TIERS: list[tuple[int, int, float]] = [
@@ -222,6 +226,7 @@ def main() -> None:
     if not data_paths:
         data_paths = default_data_paths()
     print("model-upgrade benchmark")
+    print(f"Solver backend: {solver_backend()}")
     print(f"Output directory: {args.output_dir.resolve()}")
     print("-" * 72)
     for data_path in data_paths:
